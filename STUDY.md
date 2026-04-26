@@ -58,17 +58,35 @@
 ## 2. 연관관계 매핑
 
 **핵심 개념**
-- 단방향 vs 양방향
-- 연관관계 주인 (`mappedBy`) — 외래키를 가진 쪽이 주인
-- 양방향 편의 메서드 (`Member.changeTeam()`)
-- 주인이 아닌 쪽에만 값 세팅 시 DB에 반영 안 됨
+- 단방향 vs 양방향 — 테이블 구조는 동일, 객체 탐색 방향만 다름
+- 연관관계 주인 (`mappedBy`) — 외래키를 가진 쪽이 주인, `mappedBy` 쪽은 읽기 전용
+- 양방향 편의 메서드 — 주인 + 역방향 양쪽 모두 세팅
+- 주인 아닌 쪽에만 세팅 시 DB 반영 안 됨 (team_id = null)
+
+**1차 캐시와 연관관계**
+- 주인만 세팅 시 DB는 정상이지만 1차 캐시의 역방향 컬렉션은 비어있음
+- `em.clear()` 후 재조회 시 DB 기준으로 정상 로딩
+- 편의 메서드로 양쪽 세팅 시 1차 캐시도 정상
+
+**cascade**
+- 부모 엔티티의 상태 변화를 자식에게 전파
+- `CascadeType.ALL` — persist/remove/merge 등 모두 전파
+- `CascadeType.PERSIST` — persist만 전파
+- Order 저장 시 OrderItem 별도 저장 불필요 (cascade = ALL)
+- 주의: 자식이 여러 부모에 의해 관리되는 경우 cascade 사용 지양
+
+**orphanRemoval**
+- 부모 컬렉션에서 제거된 자식을 자동으로 DELETE
+- `orphanRemoval = true` — `order.orderItems.remove(orderItem)` → DELETE 쿼리
+- cascade = ALL + orphanRemoval = true → 부모가 자식의 생명주기를 완전히 관리
 
 **예제 포인트**
 ```
-- Team 생성 → Member에 team 세팅 → DB 외래키 확인
-- team.members.add(member)만 했을 때 외래키가 저장되는가?
-- changeTeam() 편의 메서드 사용 전/후 비교
-- Order → OrderItem cascade: OrderItem 별도 저장 없이 Order만 저장
+- team.members.add(member)만 했을 때 team_id = null 확인
+- 주인만 세팅 시 1차 캐시 members.size = 0, DB 재조회 시 1 확인
+- changeTeam() 편의 메서드로 1차 캐시도 정상 세팅 확인
+- Order만 저장해도 OrderItem 자동 저장 (cascade)
+- order.orderItems.remove() 후 자동 DELETE (orphanRemoval)
 ```
 
 ---
