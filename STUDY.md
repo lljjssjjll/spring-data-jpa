@@ -8,16 +8,49 @@
 
 **핵심 개념**
 - 1차 캐시 — 같은 id로 두 번 조회 시 쿼리 1번만 발생
-- 동일성 보장 — 같은 트랜잭션 내 동일 id 조회 시 `==` 비교 true
+- 동일성 vs 동등성 — 같은 트랜잭션 내 동일 id 조회 시 동일한 객체 참조 보장
 - 변경 감지 (Dirty Checking) — `member.age = 20` 후 별도 `save()` 없이 update 쿼리 발생
 - 지연 쓰기 (Write-behind) — flush 시점까지 INSERT/UPDATE 모아서 실행
 - 준영속 — `em.detach()`, `em.clear()` 후 변경 감지 동작 안 함
 
+**1차 캐시**
+- `em.persist()` 또는 `em.find()` 시점에 1차 캐시 + 스냅샷 동시 생성
+- `em.clear()` 없이 같은 id 재조회 → SELECT 없이 1차 캐시에서 반환
+- `em.clear()` 후 재조회 → SELECT 발생 후 새 객체 생성
+- IDENTITY 전략: `em.persist()` 시점에 즉시 INSERT → id 반환 → 1차 캐시 저장
+
+**동일성 vs 동등성**
+- 동일성 (Identity) `===` — 같은 객체 참조인지 (주소값 비교)
+- 동등성 (Equality) `==` — 값이 같은지 (`equals()` 호출)
+- JPA는 같은 트랜잭션 내에서 동일 id 조회 시 **동일성** 보장 (`===` true)
+- `em.clear()` 후 재조회 → 다른 객체 (`===` false)
+- Entity에 `equals()` 미정의 시 `==`도 `===`와 동일하게 동작 (Any 기본 구현)
+- Entity는 data class 사용 지양
+  - 이유: 지연 로딩 필드를 `hashCode`/`equals`가 건드릴 수 있고, `copy()`가 id를 복사해 비영속 상태처럼 동작할 수 있음
+- 실무에서는 엔티티 직접 비교보다 `entity.id == other.id` 방식 사용
+
+**변경 감지 (Dirty Checking)**
+- 스냅샷: 영속 상태가 된 시점의 복사본 (persist/find/JPQL 모두 생성)
+- flush 시점에 1차 캐시 vs 스냅샷 비교 → 변경된 필드만 UPDATE
+- flush 자동 발생 시점 (FlushMode.AUTO)
+  1. 트랜잭션 커밋 직전
+  2. JPQL 실행 직전 (dirty 엔티티와 같은 테이블 조회 시)
+- `@Transactional` 테스트는 롤백으로 끝나므로 커밋이 없어 flush 생략 → UPDATE 미발생
+  - 확인하려면 `em.flush()` 명시 또는 `@Commit` 사용
+
+**삭제 (remove)**
+- `em.remove(entity)` — 영속 상태 엔티티를 삭제 대상으로 표시
+- flush 시점에 DELETE 쿼리 발생 (지연 쓰기 동작)
+- 준영속 엔티티는 remove 불가 → `merge()` 후 remove 해야 함
+
 **예제 포인트**
 ```
-- Member 저장 후 같은 트랜잭션에서 재조회 → 쿼리 몇 번?
-- Member age 변경 후 save() 없이 커밋 → update 쿼리 발생?
-- em.clear() 후 변경 감지 동작 여부
+- em.clear() 유무에 따른 SELECT 쿼리 횟수 비교
+- 동일 id 두 번 조회 후 === 비교
+- em.clear() 전후 === 비교
+- age 변경 후 @Commit으로 UPDATE 확인
+- JPQL 실행 전 자동 flush로 UPDATE 선행 확인
+- em.remove() 후 flush → DELETE 쿼리 확인
 ```
 
 ---
