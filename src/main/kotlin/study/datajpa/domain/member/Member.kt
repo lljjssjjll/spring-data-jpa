@@ -17,6 +17,8 @@ class Member(
     @Embedded
     var address: Address? = null,
 
+    var point: Int = 0,
+
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long = 0,
 ) : BaseEntity() {

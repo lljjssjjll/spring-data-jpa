@@ -207,18 +207,69 @@ val members: MutableList<Member>
 
 ## 4. Spring Data JPA Repository
 
-**핵심 개념**
-- `JpaRepository` 기본 메서드 (save, findById, findAll, delete 등)
-- 쿼리 메서드 — 메서드 이름으로 JPQL 자동 생성
-- `@Query` — 직접 JPQL 작성
-- `@Modifying` — 벌크 update/delete
+**JpaRepository 계층 구조**
+```
+Repository
+  └── CrudRepository        (save, findById, delete 등 기본 CRUD)
+        └── PagingAndSortingRepository  (findAll(Pageable), findAll(Sort))
+              └── JpaRepository         (flush, saveAndFlush, deleteInBatch 등)
+```
+
+**save() 동작 방식**
+- 새 엔티티 (id = 0 or null) → `em.persist()`
+- 기존 엔티티 (id 있음) → `em.merge()`
+- merge는 SELECT 후 복사 → 성능 주의, 가능하면 변경 감지 사용
+
+**쿼리 메서드**
+- 메서드 이름으로 JPQL 자동 생성
+- 주요 키워드
+  ```
+  And, Or, Between, LessThan, GreaterThan, GreaterThanEqual
+  Like, StartingWith, EndingWith, Containing
+  In, NotIn, IsNull, IsNotNull
+  OrderBy, Desc, Asc
+  ```
+- 조건이 복잡해지면 메서드 이름이 너무 길어짐 → `@Query` 사용
+
+**@Query**
+```kotlin
+// JPQL
+@Query("select m from Member m where m.username = :username")
+fun findByUsername(@Param("username") username: String): List<Member>
+
+// Native Query
+@Query(value = "select * from member where username = :username", nativeQuery = true)
+fun findByUsernameNative(@Param("username") username: String): List<Member>
+```
+
+**반환 타입**
+- 단건: `Member?` — 없으면 null, 2개 이상이면 예외
+- 단건: `Optional<Member>` — 없으면 Optional.empty()
+- 다건: `List<Member>` — 없으면 빈 리스트
+
+**Kotlin에서 @Param 생략 가능**
+- Kotlin은 컴파일 시 파라미터 이름을 보존 → `@Param` 없이도 동작
+- Java는 컴파일 시 파라미터 이름 소실 가능 → `@Param` 필수
+- 팀 컨벤션에 따라 명시 여부 결정
+
+**벌크 연산 (@Modifying)**
+```kotlin
+@Modifying(clearAutomatically = true, flushAutomatically = true)
+@Query("update Member m set m.point = m.point + :amount where m.id in :ids")
+fun bulkAddPoint(@Param("amount") amount: Int, @Param("ids") ids: List<Long>): Int
+```
+- 벌크 연산은 영속성 컨텍스트를 거치지 않고 DB 직접 수정
+- 벌크 연산 후 1차 캐시와 DB 불일치 발생 → `clearAutomatically = true`로 자동 초기화
+- `flushAutomatically = true` — 벌크 연산 전 flush 자동 실행 (같은 트랜잭션에서 변경 감지와 벌크 연산이 섞일 때)
+- 실무에서는 변경 감지와 벌크 연산을 같은 트랜잭션에서 섞지 않는 게 원칙
 
 **예제 포인트**
 ```
-- findByUsernameAndAgeGreaterThan()
-- @Query로 DTO 직접 조회
-- @Modifying + @Query로 벌크 age 증가
-- 벌크 연산 후 영속성 컨텍스트 초기화 필요성 (clearAutomatically)
+- save() 새 엔티티 vs 기존 엔티티 동작 차이 (persist vs merge)
+- findByUsernameAndAgeGreaterThan() 쿼리 메서드
+- findById() Optional 처리
+- @Query JPQL 직접 작성
+- @Modifying 벌크 연산 후 캐시 불일치 → clearAutomatically 효과 확인
 ```
 
 ---
