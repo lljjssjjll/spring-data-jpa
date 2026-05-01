@@ -4,7 +4,10 @@ import jakarta.persistence.EntityManager
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.transaction.annotation.Transactional
+import study.datajpa.domain.item.Book
 import study.datajpa.domain.member.Member
+import study.datajpa.domain.order.Order
+import study.datajpa.domain.order.OrderItem
 import study.datajpa.domain.team.Team
 import kotlin.test.Test
 
@@ -94,5 +97,56 @@ class RelationshipTest {
         // em.flush(), em.clear() 없음 -> 1차 캐시에서 반환
 
         println("members 크기: ${team.members.size}") // 0일까 1일까?
+    }
+
+    @Test
+    fun `cascade - Order 저장 시 OrderItem 자동 저장`() {
+        val team = Team(name = "teamA")
+        em.persist(team)
+
+        val member = Member(username = "member1", age = 10, team = team)
+        em.persist(member)
+
+        val book = Book(name = "JPA 책", price = 10000, stockQuantity = 10, author = "김영한", isbn = "123")
+        em.persist(book)
+
+        val orderItem = OrderItem(item = book, orderPrice = 10000, count = 1)
+        val order = Order(member = member)
+        order.addOrderItem(orderItem) // orderItem은 persist 안 함
+
+        em.persist(order)
+
+        em.flush()
+        em.clear()
+
+        val findOrder = em.find(Order::class.java, order.id)
+        println("orderItems 크기: ${findOrder.orderItems.size}")
+    }
+
+    @Test
+    fun `orphanRemoval - 컬렉션에서 제거 시 자동 DELETE`() {
+        val team = Team(name = "teamA")
+        em.persist(team)
+
+        val member = Member(username = "member1", age = 10, team = team)
+        em.persist(member)
+
+        val book = Book(name = "JPA 책", price = 10000, stockQuantity = 10, author = "김영한", isbn = "123")
+        em.persist(book)
+
+        val orderItem = OrderItem(item = book, orderPrice = 10000, count = 1)
+        val order = Order(member = member)
+        order.addOrderItem(orderItem)
+        em.persist(order)
+
+        em.flush()
+        em.clear()
+
+        val findOrder = em.find(Order::class.java, order.id)
+
+        println("===== orderItem 제거 =====")
+        findOrder.orderItems.removeAt(0)
+
+        em.flush()
     }
 }

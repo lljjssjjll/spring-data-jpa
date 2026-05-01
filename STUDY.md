@@ -43,6 +43,12 @@
 - flush 시점에 DELETE 쿼리 발생 (지연 쓰기 동작)
 - 준영속 엔티티는 remove 불가 → `merge()` 후 remove 해야 함
 
+**준영속 → 영속 (merge)**
+- `em.merge(entity)` — 준영속 엔티티를 영속 상태로 전환
+- 동작: id로 DB SELECT → 준영속 객체의 값을 영속 엔티티에 복사 → 영속 엔티티 반환
+- 원본 객체는 여전히 준영속, 반드시 반환값을 사용해야 함
+- `em.contains(원본)` = false, `em.contains(merged)` = true
+
 **예제 포인트**
 ```
 - em.clear() 유무에 따른 SELECT 쿼리 횟수 비교
@@ -68,6 +74,11 @@
 - `em.clear()` 후 재조회 시 DB 기준으로 정상 로딩
 - 편의 메서드로 양쪽 세팅 시 1차 캐시도 정상
 
+**지연 로딩 (LAZY) 맛보기**
+- `@ManyToOne(fetch = LAZY)` — 연관 엔티티를 실제 사용 시점에 조회
+- `em.find(Member)` → SELECT member / `member.team.name` 접근 → SELECT team (2번째 쿼리)
+- 자세한 내용은 3. 페치 전략 & N+1 참고
+
 **cascade**
 - 부모 엔티티의 상태 변화를 자식에게 전파
 - `CascadeType.ALL` — persist/remove/merge 등 모두 전파
@@ -77,8 +88,18 @@
 
 **orphanRemoval**
 - 부모 컬렉션에서 제거된 자식을 자동으로 DELETE
-- `orphanRemoval = true` — `order.orderItems.remove(orderItem)` → DELETE 쿼리
+- `orphanRemoval = true` — 컬렉션에서 제거 시 flush 시점에 DELETE
 - cascade = ALL + orphanRemoval = true → 부모가 자식의 생명주기를 완전히 관리
+- cascade remove — `em.remove(order)` 시 orderItems도 자동 DELETE
+
+**orphanRemoval 주의사항**
+- `list.remove(entity)`는 `equals()`로 비교
+- Entity에 `equals()` 미정의 시 참조 비교 → `em.clear()` 후 재조회한 객체와 원본은 다른 참조 → 제거 실패
+- 안전한 방법:
+  ```kotlin
+  findOrder.orderItems.removeAt(0)                      // 인덱스로 제거
+  findOrder.orderItems.removeIf { it.id == targetId }   // id 기준 제거
+  ```
 
 **예제 포인트**
 ```
@@ -86,27 +107,100 @@
 - 주인만 세팅 시 1차 캐시 members.size = 0, DB 재조회 시 1 확인
 - changeTeam() 편의 메서드로 1차 캐시도 정상 세팅 확인
 - Order만 저장해도 OrderItem 자동 저장 (cascade)
-- order.orderItems.remove() 후 자동 DELETE (orphanRemoval)
+- removeAt(0) → DELETE 확인 / remove(detachedEntity) → 삭제 실패 확인
 ```
 
 ---
 
 ## 3. 페치 전략 & N+1 문제
 
-**핵심 개념**
-- `LAZY` vs `EAGER` — 기본값과 권장 전략
-- N+1 문제 — Member 10명 조회 후 team 접근 → 쿼리 11번
-- 해결책 3가지
-  1. Fetch Join (`@Query("select m from Member m join fetch m.team")`)
-  2. `@EntityGraph(attributePaths = ["team"])`
-  3. `@BatchSize` / `default_batch_fetch_size`
+**LAZY vs EAGER**
+- `LAZY` — 연관 엔티티를 실제 접근 시점에 SELECT (프록시 객체로 대체)
+- `EAGER` — 연관 엔티티를 즉시 JOIN해서 함께 조회
+- 기본값
+  - `@ManyToOne`, `@OneToOne` → EAGER (기본값이지만 LAZY 권장)
+  - `@OneToMany`, `@ManyToMany` → LAZY
+- **실무에서는 모든 연관관계 LAZY 원칙** — EAGER는 예상치 못한 쿼리 발생
+
+**N+1 문제**
+- 원인: LAZY 로딩 상태에서 컬렉션/연관 엔티티에 반복 접근
+- 예시: Member 10명 조회(1번) → 각 member.team 접근(10번) = 총 11번
+- EAGER로 바꿔도 해결 안 됨 — JPQL은 fetch 전략 무시하고 우선 실행 후 EAGER면 추가 쿼리
+- **해결책**
+  1. **Fetch Join** — JPQL에서 join fetch로 한번에 조회
+  2. **@EntityGraph** — 어노테이션으로 fetch join 적용
+  3. **@BatchSize** — IN 절로 묶어서 조회 (N+1 → 1+1)
+
+**Fetch Join**
+```sql
+select m from Member m join fetch m.team
+```
+- 연관 엔티티를 한번의 쿼리로 함께 조회
+- 페이징과 컬렉션 fetch join 동시 사용 불가
+  - 컬렉션 fetch join + 페이징 → 경고 발생, 메모리에서 페이징 (위험)
+  - 해결: `@BatchSize` 또는 `default_batch_fetch_size` 사용
+
+**@EntityGraph**
+```kotlin
+@EntityGraph(attributePaths = ["team"])
+@Query("select m from Member m")       // @Query 없으면 메서드 이름 파싱 시도 → 오류
+fun findAllWithTeam(): List<Member>
+```
+- Fetch Join과 동일한 효과, 어노테이션으로 간편하게 적용
+- 복잡한 조건에서는 Fetch Join이 더 유연
+
+**Fetch Join vs EntityGraph JOIN 방식 차이**
+- Fetch Join — 기본 **INNER JOIN** → team이 null인 Member 제외됨
+- EntityGraph — 기본 **LEFT OUTER JOIN** → team이 null인 Member도 포함
+- team null 포함하려면 `left join fetch` 명시 필요
+- 설계 의도: Fetch Join은 개발자가 명시적으로 데이터 범위를 결정, EntityGraph는 기존 조회에 fetch만 추가하는 개념
+
+**컬렉션 + 페이징**
+- Fetch Join, EntityGraph 모두 컬렉션 + 페이징 시 경고 + 메모리 페이징 (위험)
+- 컬렉션 + 페이징이 필요하면 **@BatchSize / default_batch_fetch_size만 해결 가능**
+
+**@BatchSize**
+```kotlin
+@BatchSize(size = 100)
+@OneToMany(mappedBy = "team")
+val members: MutableList<Member>
+```
+- 또는 application.yml에 전역 설정
+  ```yaml
+  spring.jpa.properties.hibernate.default_batch_fetch_size: 100
+  ```
+- N+1 → IN 절로 한번에 조회 (1+1 또는 1+N/size)
+
+**LazyInitializationException**
+- 영속성 컨텍스트가 닫힌 후 LAZY 연관 엔티티에 접근 시 발생
+- 트랜잭션과 영속성 컨텍스트의 생명주기는 항상 같지 않음
+- 해결책
+  1. Fetch Join / EntityGraph로 미리 로딩
+  2. DTO로 변환해서 반환 (엔티티 직접 반환 지양)
+
+**OSIV (Open Session In View)**
+- 트랜잭션과 영속성 컨텍스트의 생명주기를 분리하는 설정
+- `OSIV = true` (Spring Boot 기본값)
+  - 영속성 컨텍스트: HTTP 요청 ~ 응답까지 유지
+  - 트랜잭션 종료 후 Controller에서도 LAZY 접근 가능 (읽기만, 변경 감지 동작 안 함)
+  - DB 커넥션을 오래 붙잡음 → 트래픽 많으면 커넥션 부족 위험
+- `OSIV = false`
+  - 영속성 컨텍스트: 트랜잭션과 동일한 범위
+  - 트랜잭션 종료 = 영속성 컨텍스트 종료 → Controller에서 LAZY 접근 시 예외
+  - DB 커넥션 빨리 반환 → 성능 유리
+  - Service에서 DTO 변환 후 반환 필수
+- 토비 클린 스프링 방식: OSIV=true 유지 + Controller에서 엔티티 접근해 응답 DTO 생성
+- 어느 방식이든 **엔티티가 외부(API 응답)로 직접 노출되지 않으면 됨**
 
 **예제 포인트**
 ```
-- Member 여러 명 조회 후 m.team.name 접근 → SQL 로그로 N+1 확인
-- Fetch Join으로 해결 후 쿼리 수 비교
-- 컬렉션 Fetch Join (Order → OrderItem) 페이징 시 경고 확인
+- Member 여러 명 조회 후 team.name 접근 → SQL 로그로 N+1 확인
+- EAGER로 변경 후 JPQL 조회 → 여전히 N+1 발생 확인
+- Fetch Join으로 해결 → 쿼리 1번 확인
+- 컬렉션 Fetch Join + 페이징 → 경고 로그 확인
+- @BatchSize로 N+1 → IN절 확인
 - EntityGraph vs Fetch Join 차이
+- @Transactional 없는 상태에서 LAZY 접근 → LazyInitializationException 확인
 ```
 
 ---
